@@ -1,0 +1,27 @@
+{
+  "name": "browser-core",
+  "version": "1.0.0",
+  "main": "index.js",
+  "files": [
+    "index.d.ts",
+    "index.js"
+  ],
+  "napi": {
+    "targets": [
+      "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin"
+    ],
+    "binaryName": "browser-core"
+  },
+  "engines": {
+    "node": ">= 10"
+  },
+  "scripts": {
+    "build": "napi build --platform --release"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.3"
+  }
+}
