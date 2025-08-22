@@ -36,7 +36,7 @@ enum BookmarkTable {
 #[napi(object)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bookmark {
-    pub id: i64,
+    pub id: Option<i64>, // None表示创建，Some表示更新或查询结果
     pub sort: i64,
     pub folder: i64,
     pub parent: i64,
@@ -44,34 +44,12 @@ pub struct Bookmark {
     pub name: String,
     pub icon: String,
     pub date: i64,
-}
-
-/// 书签数据结构（不包含id，用于创建和更新）
-#[napi(object)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BookmarkData {
-    pub sort: i64,
-    pub folder: i64,
-    pub parent: i64,
-    pub url: String,
-    pub name: String,
-    pub icon: String,
-    pub date: i64,
-}
-
-/// 书签数据操作请求结构（统一Create和Update）
-#[napi(object)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BookmarkDataReq {
-    pub id: Option<i64>, // None表示创建，Some表示更新
-    pub data: BookmarkData,
 }
 
 /// 书签查询请求结构
 #[napi(object)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BookmarkQueryReq {
-    // 查询过滤条件
+pub struct BookmarkQuery {
     pub url: Option<String>,
     pub name: Option<String>,
     pub folder: Option<i64>,
@@ -129,7 +107,7 @@ pub fn get_bookmark(req: GetReq) -> Result<Option<Bookmark>, Error> {
         let mut rows = stmt
             .query_map([], |row| {
                 Ok(Bookmark {
-                    id: row.get(0)?,
+                    id: Some(row.get(0)?), // 查询结果总是有 id
                     sort: row.get(1)?,
                     folder: row.get(2)?,
                     parent: row.get(3)?,
@@ -142,7 +120,10 @@ pub fn get_bookmark(req: GetReq) -> Result<Option<Bookmark>, Error> {
             .expect("Failed to execute query");
 
         match rows.next() {
-            Some(bookmark) => Ok(Some(bookmark?)),
+            Some(bookmark_row) => {
+                let bookmark = bookmark_row?;
+                Ok(Some(bookmark))
+            }
             None => Ok(None),
         }
     })
@@ -163,20 +144,20 @@ pub fn delete_bookmark(req: DeleteReq) -> Result<(), Error> {
 }
 
 /// 创建或更新书签（统一接口）
-pub fn save_bookmark(req: BookmarkDataReq) -> Result<i64, Error> {
+pub fn save_bookmark(bookmark: Bookmark) -> Result<i64, Error> {
     execute_transaction(connection(), |conn| {
-        if let Some(id) = req.id {
+        if let Some(id) = bookmark.id {
             // 更新操作
             let sql = Query::update()
                 .table(BookmarkTable::Table)
                 .values([
-                    (BookmarkTable::Sort, req.data.sort.into()),
-                    (BookmarkTable::Folder, req.data.folder.into()),
-                    (BookmarkTable::Parent, req.data.parent.into()),
-                    (BookmarkTable::Url, req.data.url.clone().into()),
-                    (BookmarkTable::Name, req.data.name.clone().into()),
-                    (BookmarkTable::Icon, req.data.icon.clone().into()),
-                    (BookmarkTable::Date, req.data.date.into()),
+                    (BookmarkTable::Sort, bookmark.sort.into()),
+                    (BookmarkTable::Folder, bookmark.folder.into()),
+                    (BookmarkTable::Parent, bookmark.parent.into()),
+                    (BookmarkTable::Url, bookmark.url.clone().into()),
+                    (BookmarkTable::Name, bookmark.name.clone().into()),
+                    (BookmarkTable::Icon, bookmark.icon.clone().into()),
+                    (BookmarkTable::Date, bookmark.date.into()),
                 ])
                 .and_where(Expr::col(BookmarkTable::Id).eq(id))
                 .to_string(SqliteQueryBuilder);
@@ -198,13 +179,13 @@ pub fn save_bookmark(req: BookmarkDataReq) -> Result<i64, Error> {
                     BookmarkTable::Date,
                 ])
                 .values_panic([
-                    req.data.sort.into(),
-                    req.data.folder.into(),
-                    req.data.parent.into(),
-                    req.data.url.into(),
-                    req.data.name.into(),
-                    req.data.icon.into(),
-                    req.data.date.into(),
+                    bookmark.sort.into(),
+                    bookmark.folder.into(),
+                    bookmark.parent.into(),
+                    bookmark.url.into(),
+                    bookmark.name.into(),
+                    bookmark.icon.into(),
+                    bookmark.date.into(),
                 ])
                 .to_string(SqliteQueryBuilder);
 
@@ -216,7 +197,7 @@ pub fn save_bookmark(req: BookmarkDataReq) -> Result<i64, Error> {
 }
 
 /// 查询书签列表
-pub fn query_bookmark(req: BookmarkQueryReq) -> Result<Vec<Bookmark>, Error> {
+pub fn query_bookmark(req: BookmarkQuery) -> Result<Vec<Bookmark>, Error> {
     execute_simple(connection(), |conn| {
         let mut query = Query::select();
         query
@@ -262,7 +243,7 @@ pub fn query_bookmark(req: BookmarkQueryReq) -> Result<Vec<Bookmark>, Error> {
         let rows = stmt
             .query_map([], |row| {
                 Ok(Bookmark {
-                    id: row.get(0)?,
+                    id: Some(row.get(0)?), // 查询结果总是有 id
                     sort: row.get(1)?,
                     folder: row.get(2)?,
                     parent: row.get(3)?,
@@ -295,7 +276,8 @@ mod tests {
         init_bookmark_database().expect("Failed to initialize database");
 
         // 创建数据
-        let main_data = BookmarkData {
+        let bookmark = Bookmark {
+            id: None, // 创建时 id 为 None
             sort: 1,
             folder: 0,
             parent: 0,
@@ -304,42 +286,35 @@ mod tests {
             icon: "".to_string(),
             date: 1234567890,
         };
-        let main_id = save_bookmark(BookmarkDataReq {
-            id: None,
-            data: main_data.clone(),
-        })
-        .unwrap();
+        let bookmark_id = save_bookmark(bookmark.clone()).unwrap();
 
         // 验证创建数据
-        assert!(main_id > 0, "Create bookmark Failed");
+        assert!(bookmark_id > 0, "Create bookmark Failed");
 
         // 获取数据
-        let retrieved_bookmark = get_bookmark(GetReq { id: main_id })
+        let retrieved_bookmark = get_bookmark(GetReq { id: bookmark_id })
             .unwrap()
             .expect("Bookmark must exist after create");
 
         // 验证获取数据
-        assert_eq!(retrieved_bookmark.id, main_id);
-        assert_eq!(retrieved_bookmark.url, main_data.url);
-        assert_eq!(retrieved_bookmark.name, main_data.name);
-        assert_eq!(retrieved_bookmark.sort, main_data.sort);
+        assert_eq!(retrieved_bookmark.id, Some(bookmark_id));
+        assert_eq!(retrieved_bookmark.url, bookmark.url);
+        assert_eq!(retrieved_bookmark.name, bookmark.name);
+        assert_eq!(retrieved_bookmark.sort, bookmark.sort);
 
         // 更新数据
-        let updated_data = BookmarkData {
-            sort: main_data.sort,
-            folder: main_data.folder,
-            parent: main_data.parent,
+        let updated_data = Bookmark {
+            id: Some(bookmark_id), // 更新时 id 为 Some
+            sort: bookmark.sort,
+            folder: bookmark.folder,
+            parent: bookmark.parent,
             url: "Updated Bookmark".to_string(),
             name: "Updated Bookmark".to_string(),
-            icon: main_data.icon,
-            date: main_data.date,
+            icon: bookmark.icon,
+            date: bookmark.date,
         };
-        save_bookmark(BookmarkDataReq {
-            id: Some(main_id),
-            data: updated_data,
-        })
-        .unwrap();
-        let updated_bookmark = get_bookmark(GetReq { id: main_id })
+        save_bookmark(updated_data).unwrap();
+        let updated_bookmark = get_bookmark(GetReq { id: bookmark_id })
             .unwrap()
             .expect("Bookmark must exist after update");
 
