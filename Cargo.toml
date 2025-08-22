@@ -1,18 +1,25 @@
 [package]
+name = "browser-core"
 edition = "2021"
-name    = "browser-core"
-version = "0.1.0"
+version = "1.0.0"
 
 [lib]
 crate-type = ["cdylib"]
 
+[dependencies.serde]
+version = "1.0"
+features = ["derive"]
+
 [dependencies]
-napi        = "3.0.0"
-napi-derive = "3.0.0"
+anyhow = "1.0.99"
+napi = "3.2.4"
+napi-derive = "3.2.4"
+rusqlite = "0.37.0"
+sea-query = "1.0.0-rc.10"
 
 [build-dependencies]
-napi-build = "2"
+napi-build = "2.2.3"
 
 [profile.release]
-lto   = true
+lto = true
 strip = "symbols"
