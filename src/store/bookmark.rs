@@ -8,10 +8,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::store::{base_path, execute_simple, execute_transaction, open_conn, DeleteReq, GetReq};
 
-// 模块级别的数据库连接
 static BOOKMARK_CONNECTION: OnceLock<Arc<Mutex<Connection>>> = OnceLock::new();
 
-/// 获取书签数据库连接
 fn connection() -> &'static Arc<Mutex<Connection>> {
     BOOKMARK_CONNECTION.get_or_init(|| {
         let base_path = base_path().unwrap_or("");
@@ -36,7 +34,7 @@ enum BookmarkTable {
 #[napi(object)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bookmark {
-    pub id: Option<i64>, // None表示创建，Some表示更新或查询结果
+    pub id: Option<i64>,
     pub sort: i64,
     pub folder: i64,
     pub parent: i64,
@@ -46,7 +44,6 @@ pub struct Bookmark {
     pub date: i64,
 }
 
-/// 书签查询请求结构
 #[napi(object)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BookmarkQuery {
@@ -59,27 +56,21 @@ pub struct BookmarkQuery {
 /// 初始化表
 pub fn init_bookmark_database() -> Result<(), Error> {
     execute_simple(connection(), |conn| {
-        let sql = Table::create()
-            .table(BookmarkTable::Table)
-            .if_not_exists()
-            .col(
-                ColumnDef::new(BookmarkTable::Id)
-                    .integer()
-                    .not_null()
-                    .auto_increment()
-                    .primary_key(),
-            )
-            .col(ColumnDef::new(BookmarkTable::Sort).integer().not_null().default(0))
-            .col(ColumnDef::new(BookmarkTable::Folder).integer().not_null().default(0))
-            .col(ColumnDef::new(BookmarkTable::Parent).integer().not_null().default(0))
-            .col(ColumnDef::new(BookmarkTable::Url).text().not_null())
-            .col(ColumnDef::new(BookmarkTable::Name).text().not_null())
-            .col(ColumnDef::new(BookmarkTable::Icon).text().not_null())
-            .col(ColumnDef::new(BookmarkTable::Date).integer().not_null())
-            .to_string(SqliteQueryBuilder);
-
-        // 执行
-        conn.execute(&sql, [])?;
+        conn.execute(
+            &Table::create()
+                .table(BookmarkTable::Table)
+                .if_not_exists()
+                .col(ColumnDef::new(BookmarkTable::Id).integer().primary_key())
+                .col(ColumnDef::new(BookmarkTable::Sort).integer())
+                .col(ColumnDef::new(BookmarkTable::Folder).integer())
+                .col(ColumnDef::new(BookmarkTable::Parent).integer())
+                .col(ColumnDef::new(BookmarkTable::Url).text())
+                .col(ColumnDef::new(BookmarkTable::Name).text())
+                .col(ColumnDef::new(BookmarkTable::Icon).text())
+                .col(ColumnDef::new(BookmarkTable::Date).integer())
+                .to_string(SqliteQueryBuilder),
+            [],
+        )?;
         Ok(())
     })
 }
@@ -87,37 +78,35 @@ pub fn init_bookmark_database() -> Result<(), Error> {
 /// 获取书签
 pub fn get_bookmark(req: GetReq) -> Result<Option<Bookmark>, Error> {
     execute_simple(connection(), |conn| {
-        let sql = Query::select()
-            .columns([
-                BookmarkTable::Id,
-                BookmarkTable::Sort,
-                BookmarkTable::Folder,
-                BookmarkTable::Parent,
-                BookmarkTable::Url,
-                BookmarkTable::Name,
-                BookmarkTable::Icon,
-                BookmarkTable::Date,
-            ])
-            .from(BookmarkTable::Table)
-            .and_where(Expr::col(BookmarkTable::Id).eq(req.id))
-            .to_string(SqliteQueryBuilder);
-
         // 执行
-        let mut stmt = conn.prepare(&sql).expect("Failed to prepare query");
-        let mut rows = stmt
-            .query_map([], |row| {
-                Ok(Bookmark {
-                    id: Some(row.get(0)?), // 查询结果总是有 id
-                    sort: row.get(1)?,
-                    folder: row.get(2)?,
-                    parent: row.get(3)?,
-                    url: row.get(4)?,
-                    name: row.get(5)?,
-                    icon: row.get(6)?,
-                    date: row.get(7)?,
-                })
+        let mut stmt = conn.prepare(
+            &Query::select()
+                .columns([
+                    BookmarkTable::Id,
+                    BookmarkTable::Sort,
+                    BookmarkTable::Folder,
+                    BookmarkTable::Parent,
+                    BookmarkTable::Url,
+                    BookmarkTable::Name,
+                    BookmarkTable::Icon,
+                    BookmarkTable::Date,
+                ])
+                .from(BookmarkTable::Table)
+                .and_where(Expr::col(BookmarkTable::Id).eq(req.id))
+                .to_string(SqliteQueryBuilder),
+        )?;
+        let mut rows = stmt.query_map([], |row| {
+            Ok(Bookmark {
+                id: Some(row.get(0)?),
+                sort: row.get(1)?,
+                folder: row.get(2)?,
+                parent: row.get(3)?,
+                url: row.get(4)?,
+                name: row.get(5)?,
+                icon: row.get(6)?,
+                date: row.get(7)?,
             })
-            .expect("Failed to execute query");
+        })?;
 
         match rows.next() {
             Some(bookmark_row) => {
@@ -132,65 +121,65 @@ pub fn get_bookmark(req: GetReq) -> Result<Option<Bookmark>, Error> {
 /// 删除书签
 pub fn delete_bookmark(req: DeleteReq) -> Result<(), Error> {
     execute_transaction(connection(), |conn| {
-        let sql = Query::delete()
-            .from_table(BookmarkTable::Table)
-            .and_where(Expr::col(BookmarkTable::Id).eq(req.id))
-            .to_string(SqliteQueryBuilder);
-
-        // 执行
-        conn.execute(&sql, []).expect("Failed to execute delete");
+        conn.execute(
+            &Query::delete()
+                .from_table(BookmarkTable::Table)
+                .and_where(Expr::col(BookmarkTable::Id).eq(req.id))
+                .to_string(SqliteQueryBuilder),
+            [],
+        )?;
         Ok(())
     })
 }
 
-/// 创建或更新书签（统一接口）
+/// 保存书签
 pub fn save_bookmark(bookmark: Bookmark) -> Result<i64, Error> {
     execute_transaction(connection(), |conn| {
         if let Some(id) = bookmark.id {
             // 更新操作
-            let sql = Query::update()
-                .table(BookmarkTable::Table)
-                .values([
-                    (BookmarkTable::Sort, bookmark.sort.into()),
-                    (BookmarkTable::Folder, bookmark.folder.into()),
-                    (BookmarkTable::Parent, bookmark.parent.into()),
-                    (BookmarkTable::Url, bookmark.url.clone().into()),
-                    (BookmarkTable::Name, bookmark.name.clone().into()),
-                    (BookmarkTable::Icon, bookmark.icon.clone().into()),
-                    (BookmarkTable::Date, bookmark.date.into()),
-                ])
-                .and_where(Expr::col(BookmarkTable::Id).eq(id))
-                .to_string(SqliteQueryBuilder);
-
-            // 执行
-            conn.execute(&sql, []).expect("Failed to execute update");
+            conn.execute(
+                &Query::update()
+                    .table(BookmarkTable::Table)
+                    .values([
+                        (BookmarkTable::Sort, bookmark.sort.into()),
+                        (BookmarkTable::Folder, bookmark.folder.into()),
+                        (BookmarkTable::Parent, bookmark.parent.into()),
+                        (BookmarkTable::Url, bookmark.url.clone().into()),
+                        (BookmarkTable::Name, bookmark.name.clone().into()),
+                        (BookmarkTable::Icon, bookmark.icon.clone().into()),
+                        (BookmarkTable::Date, bookmark.date.into()),
+                    ])
+                    .and_where(Expr::col(BookmarkTable::Id).eq(id))
+                    .to_string(SqliteQueryBuilder),
+                [],
+            )?;
             Ok(id)
         } else {
             // 创建操作
-            let sql = Query::insert()
-                .into_table(BookmarkTable::Table)
-                .columns([
-                    BookmarkTable::Sort,
-                    BookmarkTable::Folder,
-                    BookmarkTable::Parent,
-                    BookmarkTable::Url,
-                    BookmarkTable::Name,
-                    BookmarkTable::Icon,
-                    BookmarkTable::Date,
-                ])
-                .values_panic([
-                    bookmark.sort.into(),
-                    bookmark.folder.into(),
-                    bookmark.parent.into(),
-                    bookmark.url.into(),
-                    bookmark.name.into(),
-                    bookmark.icon.into(),
-                    bookmark.date.into(),
-                ])
-                .to_string(SqliteQueryBuilder);
-
-            // 执行
-            conn.execute(&sql, []).expect("Failed to execute create");
+            conn.execute(
+                &Query::insert()
+                    .into_table(BookmarkTable::Table)
+                    .columns([
+                        BookmarkTable::Sort,
+                        BookmarkTable::Folder,
+                        BookmarkTable::Parent,
+                        BookmarkTable::Url,
+                        BookmarkTable::Name,
+                        BookmarkTable::Icon,
+                        BookmarkTable::Date,
+                    ])
+                    .values_panic([
+                        bookmark.sort.into(),
+                        bookmark.folder.into(),
+                        bookmark.parent.into(),
+                        bookmark.url.into(),
+                        bookmark.name.into(),
+                        bookmark.icon.into(),
+                        bookmark.date.into(),
+                    ])
+                    .to_string(SqliteQueryBuilder),
+                [],
+            )?;
             Ok(conn.last_insert_rowid())
         }
     })
@@ -240,20 +229,18 @@ pub fn query_bookmark(req: BookmarkQuery) -> Result<Vec<Bookmark>, Error> {
         // 执行
         let sql = query.to_string(SqliteQueryBuilder);
         let mut stmt = conn.prepare(&sql).expect("Failed to prepare query");
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(Bookmark {
-                    id: Some(row.get(0)?), // 查询结果总是有 id
-                    sort: row.get(1)?,
-                    folder: row.get(2)?,
-                    parent: row.get(3)?,
-                    url: row.get(4)?,
-                    name: row.get(5)?,
-                    icon: row.get(6)?,
-                    date: row.get(7)?,
-                })
+        let rows = stmt.query_map([], |row| {
+            Ok(Bookmark {
+                id: Some(row.get(0)?), // 查询结果总是有 id
+                sort: row.get(1)?,
+                folder: row.get(2)?,
+                parent: row.get(3)?,
+                url: row.get(4)?,
+                name: row.get(5)?,
+                icon: row.get(6)?,
+                date: row.get(7)?,
             })
-            .expect("Failed to execute query");
+        })?;
         let mut records = Vec::new();
         for row in rows {
             records.push(row?);
@@ -269,6 +256,7 @@ mod tests {
 
     #[test]
     fn test_bookmark() {
+        // mkdir -p /tmp/browser-core/database
         BASE_PATH
             .set("/tmp/browser-core/database".to_string())
             .expect("Failed to set BASE_PATH");

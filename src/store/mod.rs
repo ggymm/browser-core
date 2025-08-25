@@ -5,8 +5,12 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub mod bookmark;
+pub mod download;
+pub mod favicon;
+pub mod history;
 
 pub use bookmark::*;
+pub use history::*;
 
 /// 通用的获取请求结构
 #[napi(object)]
@@ -36,6 +40,7 @@ pub fn init(db_path: &str) -> Result<(), Error> {
         .map_err(|_| anyhow::anyhow!("BASE_PATH already initialized"))?;
 
     init_bookmark_database()?;
+    init_history_database()?;
 
     Ok(())
 }

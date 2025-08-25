@@ -49,3 +49,14 @@ pub fn query_bookmark(req: store::BookmarkQuery) -> Result<Vec<store::Bookmark>,
         Err(e) => Err(napi::Error::from_reason(format!("Failed to query bookmarks: {}", e))),
     }
 }
+
+// 历史记录管理相关函数导出
+
+/// 保存历史记录（创建或更新）
+#[napi]
+pub fn save_history(history: store::History) -> Result<f64, napi::Error> {
+    match store::save_history(history) {
+        Ok(id) => Ok(id as f64), // JavaScript 使用 number 类型，转换为 f64
+        Err(e) => Err(napi::Error::from_reason(format!("Failed to save history: {}", e))),
+    }
+}
